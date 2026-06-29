@@ -1,0 +1,55 @@
+[package]
+name = "scroll"
+version = "0.1.0"
+edition = "2021"
+description = "A self-hosted reading hub, web clipper, and spaced-repetition engine"
+license = "MIT"
+
+[[bin]]
+name = "scroll"
+path = "src/main.rs"
+
+[dependencies]
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async runtime & web server
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# HTTP client & scraping
+reqwest = { version = "0.12", features = ["json"] }
+scraper = "0.18"
+ego-tree = "0.6"
+
+# Serialization & config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
+fuzzy-matcher = "0.3"
+nanoid = "0.4"
+open = "5"
+unicode-width = "0.1"
+textwrap = "0.16"
+url = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
