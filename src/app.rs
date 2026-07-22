@@ -1,14 +1,18 @@
 //! Core application state and event loop runner.
 
+use std::cell::RefCell;
 use std::io;
 use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseEvent,
+        MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::CrosstermBackend, Frame, Terminal};
+use ratatui::{backend::CrosstermBackend, widgets::ListState, Frame, Terminal};
 
 use crate::models::{Article, ArticleFilter, ArticleStatus, FilterTab, Flashcard, Highlight, ReviewSession, SortField};
 use crate::storage::Database;
@@ -51,7 +55,11 @@ pub struct App {
     pub categories: Vec<String>,
     pub selected_category_index: usize,
     pub sidebar_focused: bool,
-    
+    /// Scroll offsets for the library panes, kept across frames so the
+    /// selected row stays inside the viewport.
+    pub article_list_state: RefCell<ListState>,
+    pub sidebar_list_state: RefCell<ListState>,
+
     // Reader
     pub current_article: Option<Article>,
     pub reader_scroll: usize,
@@ -67,7 +75,8 @@ pub struct App {
     // Highlights
     pub all_highlights: Vec<(Highlight, String)>,
     pub highlight_index: usize,
-    
+    pub highlight_list_state: RefCell<ListState>,
+
     // Search
     pub search_input: String,
     pub search_active: bool,
@@ -103,7 +112,9 @@ impl App {
             categories: Vec::new(),
             selected_category_index: 0,
             sidebar_focused: true,
-            
+            article_list_state: RefCell::new(ListState::default()),
+            sidebar_list_state: RefCell::new(ListState::default()),
+
             current_article: None,
             reader_scroll: 0,
             reader_lines: Vec::new(),
@@ -116,7 +127,8 @@ impl App {
             
             all_highlights: Vec::new(),
             highlight_index: 0,
-            
+            highlight_list_state: RefCell::new(ListState::default()),
+
             search_input: String::new(),
             search_active: false,
             
@@ -238,16 +250,23 @@ impl App {
             terminal.draw(|f| self.render(f))?;
             
             if event::poll(Duration::from_millis(50))? {
-                if let Event::Key(key) = event::read()? {
-                    self.handle_key_event(key).await?;
-                } else if let Event::Resize(w, _h) = event::read()? {
-                    // Re-wrap text if in Reader mode
-                    if self.mode == AppMode::Reader {
-                        if let Some(ref art) = self.current_article {
-                            let width = (w as usize).saturating_sub(6).max(40);
-                            self.reader_lines = crate::engine::wrap_text(&art.content_markdown, width);
+                match event::read()? {
+                    Event::Key(key) => {
+                        self.handle_key_event(key).await?;
+                    }
+                    Event::Mouse(mouse) => {
+                        self.handle_mouse_event(mouse)?;
+                    }
+                    Event::Resize(w, _h) => {
+                        // Re-wrap text if in Reader mode
+                        if self.mode == AppMode::Reader {
+                            if let Some(ref art) = self.current_article {
+                                let width = (w as usize).saturating_sub(6).max(40);
+                                self.reader_lines = crate::engine::wrap_text(&art.content_markdown, width);
+                            }
                         }
                     }
+                    _ => {}
                 }
             }
         }
@@ -272,6 +291,62 @@ impl App {
             AppMode::Review => crate::ui::review::render(f, self, &self.theme),
             AppMode::Highlights => crate::ui::highlights::render(f, self, &self.theme),
         }
+    }
+
+    /// Scroll wheel support for the list views and the reader.
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<()> {
+        if self.input_mode != InputMode::Normal {
+            return Ok(());
+        }
+
+        let down = match mouse.kind {
+            MouseEventKind::ScrollDown => true,
+            MouseEventKind::ScrollUp => false,
+            _ => return Ok(()),
+        };
+
+        match self.mode {
+            AppMode::Library => {
+                if self.sidebar_focused {
+                    if !self.categories.is_empty() {
+                        self.selected_category_index = if down {
+                            (self.selected_category_index + 1).min(self.categories.len() - 1)
+                        } else {
+                            self.selected_category_index.saturating_sub(1)
+                        };
+                        self.selected_index = 0;
+                        self.load_articles()?;
+                    }
+                } else if !self.articles.is_empty() {
+                    self.selected_index = if down {
+                        (self.selected_index + 1).min(self.articles.len() - 1)
+                    } else {
+                        self.selected_index.saturating_sub(1)
+                    };
+                }
+            }
+            AppMode::Highlights => {
+                if !self.all_highlights.is_empty() {
+                    self.highlight_index = if down {
+                        (self.highlight_index + 1).min(self.all_highlights.len() - 1)
+                    } else {
+                        self.highlight_index.saturating_sub(1)
+                    };
+                }
+            }
+            AppMode::Reader => {
+                let speed = self.config.reader.scroll_speed;
+                let max_scroll = self.reader_lines.len().saturating_sub(1);
+                self.reader_scroll = if down {
+                    (self.reader_scroll + speed).min(max_scroll)
+                } else {
+                    self.reader_scroll.saturating_sub(speed)
+                };
+            }
+            AppMode::Review => {}
+        }
+
+        Ok(())
     }
 
     /// Primary event router for key combinations.

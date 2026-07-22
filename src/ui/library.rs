@@ -143,7 +143,13 @@ pub fn render(f: &mut Frame, app: &App, theme: &Theme) {
     }).collect();
 
     let sidebar_list = List::new(sidebar_items).block(sidebar_block);
-    f.render_widget(sidebar_list, sidebar_area);
+    let mut sidebar_state = app.sidebar_list_state.borrow_mut();
+    sidebar_state.select(if app.categories.is_empty() {
+        None
+    } else {
+        Some(app.selected_category_index.min(app.categories.len() - 1))
+    });
+    f.render_stateful_widget(sidebar_list, sidebar_area, &mut sidebar_state);
 
     // Render Articles List in the right pane
     let list_border_style = if !app.sidebar_focused {
@@ -218,8 +224,10 @@ pub fn render(f: &mut Frame, app: &App, theme: &Theme) {
 
         let article_list = List::new(items)
             .block(right_list_block);
-            
-        f.render_widget(article_list, right_list_area);
+
+        let mut list_state = app.article_list_state.borrow_mut();
+        list_state.select(Some(app.selected_index.min(app.articles.len() - 1)));
+        f.render_stateful_widget(article_list, right_list_area, &mut list_state);
     }
 
     // Render Status/Command Bar
@@ -236,4 +244,57 @@ fn make_progress_bar(progress: f64, width: usize) -> String {
     let filled = (progress_clamped * width as f64).round() as usize;
     let empty = width.saturating_sub(filled);
     format!("[{}{}] {:.0}%", "█".repeat(filled), "░".repeat(empty), progress_clamped * 100.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ScrollConfig;
+    use crate::models::{Article, SourceType};
+    use crate::storage::Database;
+    use ratatui::{backend::TestBackend, Terminal};
+    use std::path::Path;
+
+    fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// The article list must scroll so the selected row stays visible even
+    /// when the selection is far below the fold.
+    #[test]
+    fn selected_article_stays_visible_when_scrolled_past_viewport() {
+        let db = Database::new(Path::new(":memory:")).unwrap();
+        for i in 0..40 {
+            let mut art = Article::new(
+                format!("Article number {:02}", i),
+                "content".to_string(),
+                SourceType::Web,
+            );
+            art.id = format!("art-{:02}", i);
+            db.insert_article(&art).unwrap();
+        }
+
+        let mut app = App::new(db, ScrollConfig::default()).unwrap();
+        assert_eq!(app.articles.len(), 40);
+        app.sidebar_focused = false;
+        app.selected_index = 35;
+
+        let theme = app.theme.clone();
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|f| render(f, &app, &theme)).unwrap();
+
+        let text = buffer_text(&terminal);
+        let selected_title = &app.articles[35].title;
+        assert!(
+            text.contains(selected_title.as_str()),
+            "selected article {:?} was not rendered", selected_title
+        );
+    }
 }

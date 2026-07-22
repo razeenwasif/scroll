@@ -107,8 +107,10 @@ pub fn render(f: &mut Frame, app: &App, theme: &Theme) {
 
         let list_widget = List::new(items)
             .block(Block::default());
-            
-        f.render_widget(list_widget, list_area);
+
+        let mut list_state = app.highlight_list_state.borrow_mut();
+        list_state.select(Some(app.highlight_index.min(app.all_highlights.len() - 1)));
+        f.render_stateful_widget(list_widget, list_area, &mut list_state);
     }
 
     // Render Status/Command Bar
